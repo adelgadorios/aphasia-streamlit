@@ -1,0 +1,115 @@
+/* style.css */
+body {
+    font-family: sans-serif;
+    color: #333;
+}
+
+.page-header {
+    background-color: #f0f4f8;
+    padding: 20px;
+    border-radius: 8px;
+    margin-bottom: 20px;
+    text-align: center;
+}
+
+.page-title {
+    color: #1e3a8a;
+    font-size: 2.5em;
+    margin-bottom: 0.2em;
+}
+
+.page-subtitle {
+    color: #3b82f6;
+    font-size: 1.1em;
+}
+
+.sidebar-header {
+    color: #1e3a8a;
+    font-size: 1.5em;
+    margin-bottom: 10px;
+}
+
+.sidebar-subheader {
+    color: #3b82f6;
+    font-size: 1.2em;
+    margin-top: 15px;
+    margin-bottom: 5px;
+}
+
+.section-header {
+    color: #1e3a8a;
+    font-size: 1.8em;
+    margin-top: 30px;
+    margin-bottom: 15px;
+    border-bottom: 2px solid #3b82f6;
+    padding-bottom: 5px;
+}
+
+.content-subheader {
+    color: #3b82f6;
+    font-size: 1.3em;
+    margin-top: 10px;
+    margin-bottom: 10px;
+}
+.content-subheader-small {
+    color: #4b5563;
+    font-size: 1.1em;
+    margin-top: 8px;
+    margin-bottom: 5px;
+}
+
+.metadata-card {
+    background-color: #ffffff;
+    padding: 15px;
+    border-radius: 8px;
+    border: 1px solid #e5e7eb;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 15px;
+}
+
+.metadata-item {
+    font-size: 0.95em;
+    color: #4b5563;
+}
+.metadata-item b {
+    color: #1f2937;
+}
+
+.transcript-text {
+    background-color: #f9fafb;
+    padding: 10px 15px;
+    border-radius: 6px;
+    border: 1px solid #e5e7eb;
+    font-family: monospace;
+    white-space: pre-wrap;
+    font-size: 0.9em;
+    max-height: 400px; /* Default max height */
+    overflow-y: auto;
+}
+
+.transcript-text.short-text { /* For WER comparison boxes */
+    max-height: 200px;
+}
+
+
+.augmentation-marker {
+    background-color: #e0e7ff;
+    color: #3730a3;
+    padding: 0.1em 0.2em;
+    border-radius: 3px;
+    font-style: italic;
+}
+
+.main-content-placeholder {
+    text-align: center;
+    padding: 40px;
+    background-color: #f9fafb;
+    border-radius: 8px;
+}
+
+div[data-testid="stTabs"] button {
+    font-size: 1.05em;
+}
