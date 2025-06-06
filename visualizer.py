@@ -44,13 +44,13 @@ def extract_uploaded_dataset(uploaded_file) -> Optional[str]:
         st.error(f"Failed to extract uploaded file: {e}")
         return None
 
-def find_json_file(extract_dir: str) -> Optional[str]:
-    """Find the main JSON dataset file in the extracted directory."""
-    if not extract_dir or not os.path.exists(extract_dir):
+def find_json_file(base_dir: str) -> Optional[str]:
+    """Find the main JSON dataset file in the directory."""
+    if not base_dir or not os.path.exists(base_dir):
         return None
     
     # Look for JSON files
-    for root, dirs, files in os.walk(extract_dir):
+    for root, dirs, files in os.walk(base_dir):
         for file in files:
             if file.endswith('.json'):
                 json_path = os.path.join(root, file)
@@ -66,20 +66,23 @@ def find_json_file(extract_dir: str) -> Optional[str]:
                     continue
     return None
 
-def resolve_media_paths(dataset: List[Dict], extract_dir: str) -> List[Dict]:
-    """Update file paths in dataset to point to extracted files."""
-    if not extract_dir or not os.path.exists(extract_dir):
+def resolve_media_paths(dataset: List[Dict], data_dir1: str, data_dir2: str) -> List[Dict]:
+    """Update file paths in dataset to point to files in the two directories."""
+    if not data_dir1 or not data_dir2:
         return dataset
     
-    # Create a mapping of filename to full path for all files in extract_dir
+    # Create a mapping of filename to full path for all files in both directories
     file_map = {}
-    for root, dirs, files in os.walk(extract_dir):
-        for file in files:
-            full_path = os.path.join(root, file)
-            file_map[file] = full_path
-            # Also map the relative path from extract_dir
-            rel_path = os.path.relpath(full_path, extract_dir)
-            file_map[rel_path] = full_path
+    
+    for base_dir in [data_dir1, data_dir2]:
+        if os.path.exists(base_dir):
+            for root, dirs, files in os.walk(base_dir):
+                for file in files:
+                    full_path = os.path.join(root, file)
+                    file_map[file] = full_path
+                    # Also map the relative path from base_dir
+                    rel_path = os.path.relpath(full_path, base_dir)
+                    file_map[rel_path] = full_path
     
     # Update paths in dataset
     updated_dataset = []
@@ -757,16 +760,7 @@ def display_overview_tab(dataset: List[Dict]):
     col2.metric("Mean Segment WER (CHA vs ASR)", f"{wer_c_s_valid.mean():.4f}" if not wer_c_s_valid.empty else "N/A")
     col3.metric("Median Segment WER (CHA vs ASR)", f"{wer_c_s_valid.median():.4f}" if not wer_c_s_valid.empty else "N/A")
 
-    # if not wer_c_s_valid.empty:
-    #     fig, ax = plt.subplots(figsize=(3, 1.5))
-    #     fig.set_dpi(300)
-    #     wer_c_s_valid.plot(kind='hist', ax=ax, bins=20, color='#4c78a8', edgecolor='k')
-    #     ax.set_title('Segment WER Distribution (CHA vs ASR)', fontsize=10)
-    #     ax.set_xlabel("WER", fontsize=4); ax.set_ylabel("Frequency", fontsize=4)
-    #     ax.tick_params(axis='both', labelsize=7)
-    #     st.pyplot(fig)
-    # else: st.info("Not enough data for segment WER (CHA vs ASR) statistics.")
-    # st.markdown("---")
+
 
     # --- LLM Analysis Metrics (per segment/entry) ---
     st.markdown('<h3 class="content-subheader">LLM Analysis Metrics (Per Segment)</h3>', unsafe_allow_html=True)
@@ -832,28 +826,46 @@ def main():
     setup_page()
     initialize_session_state_vars()
 
-    # Dataset upload interface
-    st.sidebar.markdown("### 📦 Upload Dataset")
-    st.sidebar.markdown("Upload a ZIP file containing:")
-    st.sidebar.markdown("• JSON analysis results")
-    st.sidebar.markdown("• Video files")
-    st.sidebar.markdown("• Image files (gesture grids)")
+    # Dataset folder selection interface
+    st.sidebar.markdown("### 📁 Select Data Folders")
+    st.sidebar.markdown("**Instructions:**")
+    st.sidebar.markdown("1. Unzip your dataset files to two separate folders")
+    st.sidebar.markdown("2. Enter the full paths to both folders below")
+    st.sidebar.markdown("3. The program will find JSON files and media files in both folders")
     
-    uploaded_zip = st.sidebar.file_uploader(
-        "Choose dataset ZIP file", 
-        type=['zip'], 
-        key="dataset_zip_uploader",
-        help="Upload a ZIP containing all dataset files"
+    # Input fields for the two directories
+    data_dir1 = st.sidebar.text_input(
+        "📂 First Data Directory", 
+        value=st.session_state.get('data_dir1', ''),
+        placeholder="/path/to/first/unzipped/folder",
+        help="Enter the full path to your first unzipped data folder"
     )
+    
+    data_dir2 = st.sidebar.text_input(
+        "📂 Second Data Directory", 
+        value=st.session_state.get('data_dir2', ''),
+        placeholder="/path/to/second/unzipped/folder", 
+        help="Enter the full path to your second unzipped data folder"
+    )
+    
+    # Load data button
+    load_data = st.sidebar.button("🔄 Load Dataset", type="primary")
 
     display_app_header()
 
-    if not uploaded_zip:
+    # Check if paths are provided and load data
+    if not data_dir1 or not data_dir2:
         st.markdown("""
         <div class='main-content-placeholder'>
-        <h2>📦 Dataset Upload Required</h2>
-        <p>Please upload a ZIP file containing your analysis dataset using the sidebar.</p>
-        <p><strong>ZIP file should contain:</strong></p>
+        <h2>📁 Folder Selection Required</h2>
+        <p>Please enter the paths to your two data folders in the sidebar.</p>
+        <p><strong>Before using this tool:</strong></p>
+        <ol>
+        <li>Unzip your dataset files to two separate folders on your computer</li>
+        <li>Enter the full paths to both folders in the sidebar</li>
+        <li>Click "Load Dataset" to process the data</li>
+        </ol>
+        <p><strong>The folders should contain:</strong></p>
         <ul>
         <li>JSON file with analysis results</li>
         <li>Video files referenced in the JSON</li>
@@ -863,60 +875,77 @@ def main():
         """, unsafe_allow_html=True)
         return
 
-    # Process uploaded ZIP file
-    with st.spinner("📦 Extracting and processing uploaded dataset..."):
-        extract_dir = extract_uploaded_dataset(uploaded_zip)
-        
-        if not extract_dir:
-            st.error("Failed to extract the uploaded ZIP file.")
-            return
-        
-        # Find JSON file
-        json_file_path = find_json_file(extract_dir)
-        
-        if not json_file_path:
-            st.error("No valid analysis JSON file found in the uploaded ZIP.")
-            return
-        
-        # Load and process dataset
-        try:
-            with open(json_file_path, 'r') as f:
-                raw_dataset = json.load(f)
+    # Validate directories exist
+    if not os.path.exists(data_dir1):
+        st.error(f"❌ First directory does not exist: {data_dir1}")
+        return
+    
+    if not os.path.exists(data_dir2):
+        st.error(f"❌ Second directory does not exist: {data_dir2}")
+        return
+
+    # Process data if load button clicked or data not loaded yet
+    if load_data or not st.session_state.get('dataset') or st.session_state.get('data_dir1') != data_dir1 or st.session_state.get('data_dir2') != data_dir2:
+        with st.spinner("📂 Loading dataset from directories..."):
             
-            # Resolve all media paths to point to extracted files
-            resolved_dataset = resolve_media_paths(raw_dataset, extract_dir)
+            # Save directory paths to session state
+            st.session_state.data_dir1 = data_dir1
+            st.session_state.data_dir2 = data_dir2
             
-            # Process the dataset using existing logic
-            processed_dataset = []
-            for entry in resolved_dataset:
-                # Parse LLM responses if present
-                raw_response = entry.get('model_analysis_response_raw')
-                if raw_response:
-                    parsed_data = parse_model_response(raw_response)
-                    entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
-                    entry['model_explanation'] = parsed_data['explanation']
-                else:
-                    entry.setdefault('model_augmented_transcript', "Not available.")
-                    entry.setdefault('model_explanation', "Not available.")
-                processed_dataset.append(entry)
+            # Find JSON file in either directory
+            json_file_path = find_json_file(data_dir1)
+            if not json_file_path:
+                json_file_path = find_json_file(data_dir2)
             
-            # Update session state
-            st.session_state.dataset = processed_dataset
-            st.session_state.current_file_name = os.path.basename(json_file_path)
-            st.session_state.extract_dir = extract_dir
+            if not json_file_path:
+                st.error("❌ No valid analysis JSON file found in either directory.")
+                return
             
-            # Prepare participant data
-            prepare_participant_task_data(processed_dataset)
-            
-            st.sidebar.success(f"✅ Loaded {len(processed_dataset)} entries from {st.session_state.current_file_name}")
-            
-        except Exception as e:
-            st.error(f"Failed to process dataset: {e}")
-            return
+            # Load and process dataset
+            try:
+                with open(json_file_path, 'r') as f:
+                    raw_dataset = json.load(f)
+                
+                # Resolve all media paths to point to files in both directories
+                resolved_dataset = resolve_media_paths(raw_dataset, data_dir1, data_dir2)
+                
+                # Process the dataset using existing logic
+                processed_dataset = []
+                for entry in resolved_dataset:
+                    # Parse LLM responses if present
+                    raw_response = entry.get('model_analysis_response_raw')
+                    if raw_response:
+                        parsed_data = parse_model_response(raw_response)
+                        entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
+                        entry['model_explanation'] = parsed_data['explanation']
+                    else:
+                        entry.setdefault('model_augmented_transcript', "Not available.")
+                        entry.setdefault('model_explanation', "Not available.")
+                    processed_dataset.append(entry)
+                
+                # Update session state
+                st.session_state.dataset = processed_dataset
+                st.session_state.current_file_name = os.path.basename(json_file_path)
+                
+                # Prepare participant data
+                prepare_participant_task_data(processed_dataset)
+                
+                st.sidebar.success(f"✅ Loaded {len(processed_dataset)} entries from {st.session_state.current_file_name}")
+                
+            except Exception as e:
+                st.error(f"❌ Failed to process dataset: {e}")
+                return
 
     if not st.session_state.get('dataset'):
-        st.error("Dataset is not available. Please re-upload.")
+        st.info("💡 Enter folder paths and click 'Load Dataset' to begin.")
         return
+
+    # Display folder status
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Dataset Status")
+    st.sidebar.success(f"📁 Folder 1: {os.path.basename(data_dir1)}")
+    st.sidebar.success(f"📁 Folder 2: {os.path.basename(data_dir2)}")
+    st.sidebar.info(f"📄 {len(st.session_state.dataset)} entries loaded")
 
     tab_detailed, tab_overview = st.tabs(["📄 Detailed Entry View", "📊 Overview"])
 
