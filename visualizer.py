@@ -10,6 +10,111 @@ import numpy as np # For numerical operations
 import jiwer # For WER calculation
 import matplotlib.pyplot as plt # For histograms
 from unidecode import unidecode
+import gc
+from pathlib import Path
+
+# File upload and path resolution utilities
+import zipfile
+import tempfile
+import shutil
+
+def extract_uploaded_dataset(uploaded_file) -> Optional[str]:
+    """Extract uploaded zip file and return the extraction directory."""
+    if uploaded_file is None:
+        return None
+    
+    try:
+        # Create a temporary directory for this session
+        if 'temp_extract_dir' not in st.session_state:
+            st.session_state.temp_extract_dir = tempfile.mkdtemp(prefix="streamlit_dataset_")
+        
+        extract_dir = st.session_state.temp_extract_dir
+        
+        # Clear previous extraction
+        if os.path.exists(extract_dir):
+            shutil.rmtree(extract_dir)
+        os.makedirs(extract_dir, exist_ok=True)
+        
+        # Extract the zip file
+        with zipfile.ZipFile(uploaded_file, 'r') as zip_ref:
+            zip_ref.extractall(extract_dir)
+        
+        return extract_dir
+    except Exception as e:
+        st.error(f"Failed to extract uploaded file: {e}")
+        return None
+
+def find_json_file(extract_dir: str) -> Optional[str]:
+    """Find the main JSON dataset file in the extracted directory."""
+    if not extract_dir or not os.path.exists(extract_dir):
+        return None
+    
+    # Look for JSON files
+    for root, dirs, files in os.walk(extract_dir):
+        for file in files:
+            if file.endswith('.json'):
+                json_path = os.path.join(root, file)
+                try:
+                    # Validate it's a dataset JSON
+                    with open(json_path, 'r') as f:
+                        data = json.load(f)
+                        if isinstance(data, list) and len(data) > 0 and isinstance(data[0], dict):
+                            sample = data[0]
+                            if any(key in sample for key in ['task_segment_id', 'participant_identifier', 'task_label']):
+                                return json_path
+                except:
+                    continue
+    return None
+
+def resolve_media_paths(dataset: List[Dict], extract_dir: str) -> List[Dict]:
+    """Update file paths in dataset to point to extracted files."""
+    if not extract_dir or not os.path.exists(extract_dir):
+        return dataset
+    
+    # Create a mapping of filename to full path for all files in extract_dir
+    file_map = {}
+    for root, dirs, files in os.walk(extract_dir):
+        for file in files:
+            full_path = os.path.join(root, file)
+            file_map[file] = full_path
+            # Also map the relative path from extract_dir
+            rel_path = os.path.relpath(full_path, extract_dir)
+            file_map[rel_path] = full_path
+    
+    # Update paths in dataset
+    updated_dataset = []
+    for entry in dataset:
+        updated_entry = entry.copy()
+        
+        # Update video paths
+        for video_field in ['video_filepath', 'video_filepath_orig', 'video_filepath_analysis']:
+            if video_field in updated_entry and updated_entry[video_field]:
+                original_path = updated_entry[video_field]
+                filename = os.path.basename(original_path)
+                
+                if filename in file_map:
+                    updated_entry[video_field] = file_map[filename]
+                elif original_path in file_map:
+                    updated_entry[video_field] = file_map[original_path]
+        
+        # Update gesture grid paths
+        for grid_field in ['gesture_grid_filepaths', 'gesture_motion_sequence_grid_image_paths']:
+            if grid_field in updated_entry and updated_entry[grid_field]:
+                if isinstance(updated_entry[grid_field], list):
+                    updated_paths = []
+                    for path in updated_entry[grid_field]:
+                        filename = os.path.basename(path)
+                        if filename in file_map:
+                            updated_paths.append(file_map[filename])
+                        elif path in file_map:
+                            updated_paths.append(file_map[path])
+                        else:
+                            updated_paths.append(path)  # Keep original if not found
+                    updated_entry[grid_field] = updated_paths
+        
+        updated_dataset.append(updated_entry)
+    
+    return updated_dataset
 
 # --- Configuration & Styling ---
 def load_css(file_path: str):
@@ -274,6 +379,8 @@ def parse_model_response(raw_response_str: Optional[str]) -> Dict[str, str]:
 
 
 # --- Data Loading & Preprocessing ---
+
+
 def initialize_session_state_vars():
     """Initialize session state variables for navigation."""
     if 'participant_data_map' not in st.session_state:
@@ -290,32 +397,7 @@ def initialize_session_state_vars():
         st.session_state.current_file_name = None
 
 
-@st.cache_data
-def load_and_preprocess_dataset(uploaded_file_content: bytes, file_name: str) -> Optional[List[Dict]]:
-    """Loads JSON data from uploaded file content, preprocesses it, and returns it."""
-    if not uploaded_file_content: return None
-    try:
-        import io
-        file_like_object = io.BytesIO(uploaded_file_content)
-        data = json.load(file_like_object)
 
-        if not isinstance(data, list) or not all(isinstance(item, dict) for item in data):
-            st.sidebar.error("Invalid JSON: Expected a list of dictionary entries.")
-            return None
-
-        for entry in data:
-            raw_response = entry.get('model_analysis_response_raw')
-            entry.setdefault('model_augmented_transcript', "Not available.")
-            entry.setdefault('model_explanation', "Not available.")
-            if raw_response:
-                parsed_data = parse_model_response(raw_response)
-                entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
-                entry['model_explanation'] = parsed_data['explanation']
-        st.sidebar.success(f"Loaded and processed {len(data)} entries from {file_name}.")
-        return data
-    except Exception as e:
-        st.sidebar.error(f"Error loading or processing JSON from {file_name}: {e}")
-        return None
 
 def prepare_participant_task_data(dataset: List[Dict]):
     """Populates session state with participant and task mappings, sorted by time."""
@@ -750,26 +832,86 @@ def main():
     setup_page()
     initialize_session_state_vars()
 
-    uploaded_file = st.sidebar.file_uploader("Upload Analysis JSON Results", type=['json'], key="dataset_uploader")
+    # Dataset upload interface
+    st.sidebar.markdown("### 📦 Upload Dataset")
+    st.sidebar.markdown("Upload a ZIP file containing:")
+    st.sidebar.markdown("• JSON analysis results")
+    st.sidebar.markdown("• Video files")
+    st.sidebar.markdown("• Image files (gesture grids)")
+    
+    uploaded_zip = st.sidebar.file_uploader(
+        "Choose dataset ZIP file", 
+        type=['zip'], 
+        key="dataset_zip_uploader",
+        help="Upload a ZIP containing all dataset files"
+    )
+
     display_app_header()
 
-    if not uploaded_file:
-        st.markdown("<div class='main-content-placeholder'>Please upload JSON results file using the sidebar.</div>", unsafe_allow_html=True)
+    if not uploaded_zip:
+        st.markdown("""
+        <div class='main-content-placeholder'>
+        <h2>📦 Dataset Upload Required</h2>
+        <p>Please upload a ZIP file containing your analysis dataset using the sidebar.</p>
+        <p><strong>ZIP file should contain:</strong></p>
+        <ul>
+        <li>JSON file with analysis results</li>
+        <li>Video files referenced in the JSON</li>
+        <li>Image files (gesture grids) referenced in the JSON</li>
+        </ul>
+        </div>
+        """, unsafe_allow_html=True)
         return
 
-    uploaded_file_content = uploaded_file.getvalue()
-    if st.session_state.current_file_name != uploaded_file.name or st.session_state.dataset is None:
-        st.session_state.current_file_name = uploaded_file.name
-        dataset = load_and_preprocess_dataset(uploaded_file_content, uploaded_file.name)
-        st.session_state.dataset = dataset
-        if dataset:
-            prepare_participant_task_data(dataset)
-        else:
-            st.session_state.participant_data_map = {}
-            st.session_state.all_participants_ids = []
-            st.session_state.selected_participant_idx = 0
-            st.session_state.selected_task_idx = 0
-            st.error("Dataset could not be loaded or processed. Please check the file format or console for errors.")
+    # Process uploaded ZIP file
+    with st.spinner("📦 Extracting and processing uploaded dataset..."):
+        extract_dir = extract_uploaded_dataset(uploaded_zip)
+        
+        if not extract_dir:
+            st.error("Failed to extract the uploaded ZIP file.")
+            return
+        
+        # Find JSON file
+        json_file_path = find_json_file(extract_dir)
+        
+        if not json_file_path:
+            st.error("No valid analysis JSON file found in the uploaded ZIP.")
+            return
+        
+        # Load and process dataset
+        try:
+            with open(json_file_path, 'r') as f:
+                raw_dataset = json.load(f)
+            
+            # Resolve all media paths to point to extracted files
+            resolved_dataset = resolve_media_paths(raw_dataset, extract_dir)
+            
+            # Process the dataset using existing logic
+            processed_dataset = []
+            for entry in resolved_dataset:
+                # Parse LLM responses if present
+                raw_response = entry.get('model_analysis_response_raw')
+                if raw_response:
+                    parsed_data = parse_model_response(raw_response)
+                    entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
+                    entry['model_explanation'] = parsed_data['explanation']
+                else:
+                    entry.setdefault('model_augmented_transcript', "Not available.")
+                    entry.setdefault('model_explanation', "Not available.")
+                processed_dataset.append(entry)
+            
+            # Update session state
+            st.session_state.dataset = processed_dataset
+            st.session_state.current_file_name = os.path.basename(json_file_path)
+            st.session_state.extract_dir = extract_dir
+            
+            # Prepare participant data
+            prepare_participant_task_data(processed_dataset)
+            
+            st.sidebar.success(f"✅ Loaded {len(processed_dataset)} entries from {st.session_state.current_file_name}")
+            
+        except Exception as e:
+            st.error(f"Failed to process dataset: {e}")
             return
 
     if not st.session_state.get('dataset'):
