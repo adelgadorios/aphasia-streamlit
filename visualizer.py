@@ -65,53 +65,54 @@ def find_json_file(base_dir: str) -> Optional[str]:
                     continue
     return None
 
-def resolve_media_paths(dataset: List[Dict], data_dir1: str, data_dir2: str) -> List[Dict]:
-    """Update file paths in dataset to point to files in the two directories."""
-    if not data_dir1 or not data_dir2:
+def resolve_media_paths(dataset: List[Dict], json_dir: str) -> List[Dict]:
+    """Update file paths in dataset to point to gesture_grids/ and videos/ folders alongside the JSON."""
+    if not json_dir or not os.path.exists(json_dir):
         return dataset
     
-    # Create a mapping of filename to full path for all files in both directories
-    file_map = {}
+    # Define the expected folders
+    gesture_grids_dir = os.path.join(json_dir, "gesture_grids")
+    videos_dir = os.path.join(json_dir, "videos")
     
-    for base_dir in [data_dir1, data_dir2]:
-        if os.path.exists(base_dir):
-            for root, dirs, files in os.walk(base_dir):
-                for file in files:
-                    full_path = os.path.join(root, file)
-                    file_map[file] = full_path
-                    # Also map the relative path from base_dir
-                    rel_path = os.path.relpath(full_path, base_dir)
-                    file_map[rel_path] = full_path
+    # Create a mapping of gesture grid filenames to their full paths (including participant subfolders)
+    gesture_grid_map = {}
+    if os.path.exists(gesture_grids_dir):
+        for participant_folder in os.listdir(gesture_grids_dir):
+            participant_path = os.path.join(gesture_grids_dir, participant_folder)
+            if os.path.isdir(participant_path):
+                for filename in os.listdir(participant_path):
+                    if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        full_path = os.path.join(participant_path, filename)
+                        gesture_grid_map[filename] = full_path
     
     # Update paths in dataset
     updated_dataset = []
     for entry in dataset:
         updated_entry = entry.copy()
         
-        # Update video paths
+        # Update video paths to point to videos/ folder (flat structure)
         for video_field in ['video_filepath', 'video_filepath_orig', 'video_filepath_analysis']:
             if video_field in updated_entry and updated_entry[video_field]:
                 original_path = updated_entry[video_field]
                 filename = os.path.basename(original_path)
-                
-                if filename in file_map:
-                    updated_entry[video_field] = file_map[filename]
-                elif original_path in file_map:
-                    updated_entry[video_field] = file_map[original_path]
+                new_path = os.path.join(videos_dir, filename)
+                updated_entry[video_field] = new_path
         
-        # Update gesture grid paths
+        # Update gesture grid paths to point to gesture_grids/participant/ folders (nested structure)
         for grid_field in ['gesture_grid_filepaths', 'gesture_motion_sequence_grid_image_paths']:
             if grid_field in updated_entry and updated_entry[grid_field]:
                 if isinstance(updated_entry[grid_field], list):
                     updated_paths = []
                     for path in updated_entry[grid_field]:
                         filename = os.path.basename(path)
-                        if filename in file_map:
-                            updated_paths.append(file_map[filename])
-                        elif path in file_map:
-                            updated_paths.append(file_map[path])
+                        # Use the mapping to find the correct participant subfolder
+                        if filename in gesture_grid_map:
+                            updated_paths.append(gesture_grid_map[filename])
                         else:
-                            updated_paths.append(path)  # Keep original if not found
+                            # Fallback: try to construct path using participant identifier
+                            participant_id = updated_entry.get('participant_identifier', 'unknown')
+                            fallback_path = os.path.join(gesture_grids_dir, str(participant_id), filename)
+                            updated_paths.append(fallback_path)
                     updated_entry[grid_field] = updated_paths
         
         updated_dataset.append(updated_entry)
@@ -825,126 +826,153 @@ def main():
     setup_page()
     initialize_session_state_vars()
 
-    # Dataset folder selection interface
-    st.sidebar.markdown("### 📁 Select Data Folders")
-    st.sidebar.markdown("**Instructions:**")
-    st.sidebar.markdown("1. Unzip your dataset files to two separate folders")
-    st.sidebar.markdown("2. Enter the full paths to both folders below")
-    st.sidebar.markdown("3. The program will find JSON files and media files in both folders")
+    # JSON file upload interface
+    st.sidebar.markdown("### 📄 Upload Analysis JSON")
+    st.sidebar.markdown("**Setup Instructions:**")
+    st.sidebar.markdown("1. Place your JSON file in a folder")
+    st.sidebar.markdown("2. Create `videos/` and `gesture_grids/` subfolders")
+    st.sidebar.markdown("3. Put videos in `videos/` and gesture grids in `gesture_grids/participant_id/`")
+    st.sidebar.markdown("4. Upload the JSON file below")
     
-    # Input fields for the two directories
-    data_dir1 = st.sidebar.text_input(
-        "📂 First Data Directory", 
-        value=st.session_state.get('data_dir1', ''),
-        placeholder="/path/to/first/unzipped/folder",
-        help="Enter the full path to your first unzipped data folder"
+    uploaded_json = st.sidebar.file_uploader(
+        "Choose JSON analysis file", 
+        type=['json'], 
+        key="json_uploader",
+        help="Upload the JSON file with analysis results. Videos and gesture grids should be in subfolders."
     )
-    
-    data_dir2 = st.sidebar.text_input(
-        "📂 Second Data Directory", 
-        value=st.session_state.get('data_dir2', ''),
-        placeholder="/path/to/second/unzipped/folder", 
-        help="Enter the full path to your second unzipped data folder"
-    )
-    
-    # Load data button
-    load_data = st.sidebar.button("🔄 Load Dataset", type="primary")
 
     display_app_header()
 
-    # Check if paths are provided and load data
-    if not data_dir1 or not data_dir2:
+    if not uploaded_json:
         st.markdown("""
         <div class='main-content-placeholder'>
-        <h2>📁 Folder Selection Required</h2>
-        <p>Please enter the paths to your two data folders in the sidebar.</p>
-        <p><strong>Before using this tool:</strong></p>
-        <ol>
-        <li>Unzip your dataset files to two separate folders on your computer</li>
-        <li>Enter the full paths to both folders in the sidebar</li>
-        <li>Click "Load Dataset" to process the data</li>
-        </ol>
-        <p><strong>The folders should contain:</strong></p>
-        <ul>
-        <li>JSON file with analysis results</li>
-        <li>Video files referenced in the JSON</li>
-        <li>Image files (gesture grids) referenced in the JSON</li>
-        </ul>
+        <h2>📄 JSON Upload Required</h2>
+        <p>Please upload your analysis JSON file using the sidebar.</p>
+        <p><strong>Required folder structure:</strong></p>
+        <pre>
+your_data_folder/
+├── analysis.json          ← Upload this file
+├── videos/
+│   ├── participant1.mp4
+│   ├── participant2.mp4
+│   └── ...
+└── gesture_grids/
+    ├── participant1/
+    │   ├── grid_001.png
+    │   ├── grid_002.png
+    │   └── ...
+    ├── participant2/
+    │   ├── grid_003.png
+    │   ├── grid_004.png
+    │   └── ...
+    └── ...
+        </pre>
+        <p>The program will automatically look for videos in <code>videos/</code> and gesture grids in <code>gesture_grids/participant_id/</code>.</p>
         </div>
         """, unsafe_allow_html=True)
         return
 
-    # Validate directories exist
-    if not os.path.exists(data_dir1):
-        st.error(f"❌ First directory does not exist: {data_dir1}")
-        return
-    
-    if not os.path.exists(data_dir2):
-        st.error(f"❌ Second directory does not exist: {data_dir2}")
-        return
-
-    # Process data if load button clicked or data not loaded yet
-    if load_data or not st.session_state.get('dataset') or st.session_state.get('data_dir1') != data_dir1 or st.session_state.get('data_dir2') != data_dir2:
-        with st.spinner("📂 Loading dataset from directories..."):
+    # Process uploaded JSON file
+    with st.spinner("📄 Processing uploaded JSON file..."):
+        try:
+            # Load JSON data
+            json_data = json.loads(uploaded_json.getvalue().decode('utf-8'))
             
-            # Save directory paths to session state
-            st.session_state.data_dir1 = data_dir1
-            st.session_state.data_dir2 = data_dir2
-            
-            # Find JSON file in either directory
-            json_file_path = find_json_file(data_dir1)
-            if not json_file_path:
-                json_file_path = find_json_file(data_dir2)
-            
-            if not json_file_path:
-                st.error("❌ No valid analysis JSON file found in either directory.")
+            if not isinstance(json_data, list) or len(json_data) == 0:
+                st.error("❌ Invalid JSON format. Expected a list of analysis entries.")
                 return
             
-            # Load and process dataset
-            try:
-                with open(json_file_path, 'r') as f:
-                    raw_dataset = json.load(f)
-                
-                # Resolve all media paths to point to files in both directories
-                resolved_dataset = resolve_media_paths(raw_dataset, data_dir1, data_dir2)
-                
-                # Process the dataset using existing logic
-                processed_dataset = []
-                for entry in resolved_dataset:
-                    # Parse LLM responses if present
-                    raw_response = entry.get('model_analysis_response_raw')
-                    if raw_response:
-                        parsed_data = parse_model_response(raw_response)
-                        entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
-                        entry['model_explanation'] = parsed_data['explanation']
-                    else:
-                        entry.setdefault('model_augmented_transcript', "Not available.")
-                        entry.setdefault('model_explanation', "Not available.")
-                    processed_dataset.append(entry)
-                
-                # Update session state
-                st.session_state.dataset = processed_dataset
-                st.session_state.current_file_name = os.path.basename(json_file_path)
-                
-                # Prepare participant data
-                prepare_participant_task_data(processed_dataset)
-                
-                st.sidebar.success(f"✅ Loaded {len(processed_dataset)} entries from {st.session_state.current_file_name}")
-                
-            except Exception as e:
-                st.error(f"❌ Failed to process dataset: {e}")
+            # Validate it looks like an analysis dataset
+            sample = json_data[0]
+            if not isinstance(sample, dict) or not any(key in sample for key in ['task_segment_id', 'participant_identifier', 'task_label']):
+                st.error("❌ JSON doesn't appear to be a valid analysis dataset.")
                 return
+            
+            # Get the directory where the JSON conceptually lives
+            json_dir = os.getcwd()  # Assume folders are in current working directory
+            
+            # Resolve media paths to point to local folders
+            resolved_dataset = resolve_media_paths(json_data, json_dir)
+            
+            # Check if the expected folders exist
+            gesture_grids_dir = os.path.join(json_dir, "gesture_grids")
+            videos_dir = os.path.join(json_dir, "videos")
+            
+            folder_warnings = []
+            if not os.path.exists(videos_dir):
+                folder_warnings.append(f"⚠️ Videos folder not found: `{videos_dir}`")
+            if not os.path.exists(gesture_grids_dir):
+                folder_warnings.append(f"⚠️ Gesture grids folder not found: `{gesture_grids_dir}`")
+            
+            if folder_warnings:
+                for warning in folder_warnings:
+                    st.warning(warning)
+                st.info("💡 Media files may not display correctly. Ensure you have `videos/` and `gesture_grids/` folders in your current directory.")
+            
+            # Process the dataset using existing logic
+            processed_dataset = []
+            for entry in resolved_dataset:
+                # Parse LLM responses if present
+                raw_response = entry.get('model_analysis_response_raw')
+                if raw_response:
+                    parsed_data = parse_model_response(raw_response)
+                    entry['model_augmented_transcript'] = parsed_data['augmented_transcript']
+                    entry['model_explanation'] = parsed_data['explanation']
+                else:
+                    entry.setdefault('model_augmented_transcript', "Not available.")
+                    entry.setdefault('model_explanation', "Not available.")
+                processed_dataset.append(entry)
+            
+            # Update session state
+            st.session_state.dataset = processed_dataset
+            st.session_state.current_file_name = uploaded_json.name
+            
+            # Prepare participant data
+            prepare_participant_task_data(processed_dataset)
+            
+            st.sidebar.success(f"✅ Loaded {len(processed_dataset)} entries from {uploaded_json.name}")
+            
+            # Show folder status with participant breakdown
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("### 📁 Expected Folders")
+            
+            # Videos folder status
+            if os.path.exists(videos_dir):
+                video_count = len([f for f in os.listdir(videos_dir) if f.lower().endswith(('.mp4', '.mov', '.avi'))])
+                st.sidebar.success(f"📹 Videos: {video_count} files found")
+            else:
+                st.sidebar.error("📹 Videos folder missing")
+                
+            # Gesture grids folder status (with participant breakdown)
+            if os.path.exists(gesture_grids_dir):
+                participant_folders = [f for f in os.listdir(gesture_grids_dir) if os.path.isdir(os.path.join(gesture_grids_dir, f))]
+                total_grids = 0
+                for participant_folder in participant_folders:
+                    participant_path = os.path.join(gesture_grids_dir, participant_folder)
+                    grid_count = len([f for f in os.listdir(participant_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+                    total_grids += grid_count
+                
+                st.sidebar.success(f"🖼️ Gesture grids: {total_grids} files across {len(participant_folders)} participants")
+                
+                # Show participant breakdown in expander
+                with st.sidebar.expander("👥 Participant breakdown"):
+                    for participant_folder in sorted(participant_folders):
+                        participant_path = os.path.join(gesture_grids_dir, participant_folder)
+                        grid_count = len([f for f in os.listdir(participant_path) if f.lower().endswith(('.png', '.jpg', '.jpeg'))])
+                        st.write(f"• {participant_folder}: {grid_count} grids")
+            else:
+                st.sidebar.error("🖼️ Gesture grids folder missing")
+            
+        except json.JSONDecodeError as e:
+            st.error(f"❌ Invalid JSON file: {e}")
+            return
+        except Exception as e:
+            st.error(f"❌ Failed to process JSON file: {e}")
+            return
 
     if not st.session_state.get('dataset'):
-        st.info("💡 Enter folder paths and click 'Load Dataset' to begin.")
+        st.error("Dataset is not available. Please re-upload the JSON file.")
         return
-
-    # Display folder status
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### 📊 Dataset Status")
-    st.sidebar.success(f"📁 Folder 1: {os.path.basename(data_dir1)}")
-    st.sidebar.success(f"📁 Folder 2: {os.path.basename(data_dir2)}")
-    st.sidebar.info(f"📄 {len(st.session_state.dataset)} entries loaded")
 
     tab_detailed, tab_overview = st.tabs(["📄 Detailed Entry View", "📊 Overview"])
 
