@@ -8,7 +8,6 @@ import re
 import pandas as pd
 import numpy as np # For numerical operations
 import jiwer # For WER calculation
-import matplotlib.pyplot as plt # For histograms
 from unidecode import unidecode
 import gc
 from pathlib import Path
